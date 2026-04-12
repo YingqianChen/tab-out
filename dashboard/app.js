@@ -587,12 +587,12 @@ function stripTitleNoise(title) {
   // 1. Strip leading notification count: "(2) Title" or "(99+) Title"
   title = title.replace(/^\(\d+\+?\)\s*/, '');
 
-  // 2. Strip trailing email address: "Subject - user@example.com"
-  //    Handles any separator (hyphen, en dash, em dash, or Unicode dashes)
-  //    before an email. Also catches " - email" with no separator detected.
-  title = title.replace(/\s*[\-\u2010\u2011\u2012\u2013\u2014\u2015]\s*[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\s*$/, '');
-  // Fallback: if there's still an email at the end with any whitespace/separator before it
-  title = title.replace(/\s+[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\s*$/, '');
+  // 2. Strip email addresses anywhere in the title (privacy + cleaner display)
+  //    Catches patterns like "Subject - user@example.com - Gmail"
+  //    First remove "- email@domain.com" segments (with separator)
+  title = title.replace(/\s*[\-\u2010\u2011\u2012\u2013\u2014\u2015]\s*[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, '');
+  //    Then catch any remaining bare email addresses
+  title = title.replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, '');
 
   // 3. Clean up X/Twitter title format: "Name on X: \"quote text\"" → "Name: \"quote text\""
   title = title.replace(/\s+on X:\s*/, ': ');
@@ -1099,8 +1099,15 @@ async function renderStaticDashboard() {
   // Special case: "landing pages" — homepages / inboxes / feeds that you
   // keep open out of habit. These get pulled into their own group so you
   // can close them all at once instead of hunting across domain cards.
+  // Landing pages are homepages, inboxes, and feeds. A specific email thread
+  // or a specific tweet is NOT a landing page — those belong with their domain.
   const LANDING_PAGE_PATTERNS = [
-    { hostname: 'mail.google.com',             pathPrefix: '/mail/' },
+    { hostname: 'mail.google.com',  test: (p, h) => {
+      // Only the inbox itself, not individual emails.
+      // Gmail inbox URLs end with #inbox (no message ID after it)
+      // Individual emails look like #inbox/FMfcgz...
+      return !h.includes('#inbox/') && !h.includes('#sent/') && !h.includes('#search/');
+    }},
     { hostname: 'x.com',                       pathExact: ['/home'] },
     { hostname: 'www.linkedin.com',            pathExact: ['/'] },
     { hostname: 'github.com',                  pathExact: ['/'] },
@@ -1112,6 +1119,7 @@ async function renderStaticDashboard() {
       const parsed = new URL(url);
       return LANDING_PAGE_PATTERNS.some(p => {
         if (parsed.hostname !== p.hostname) return false;
+        if (p.test)       return p.test(parsed.pathname, url);
         if (p.pathPrefix) return parsed.pathname.startsWith(p.pathPrefix);
         if (p.pathExact)  return p.pathExact.includes(parsed.pathname);
         return parsed.pathname === '/';
