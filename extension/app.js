@@ -110,6 +110,70 @@ async function closeTabsExact(urls) {
 }
 
 /**
+ * sortTabsByDomain()
+ *
+ * Rearranges open tabs so that tabs with the same hostname sit next
+ * to each other in the browser's tab bar. Operates per-window,
+ * preserves browser-pinned tabs (they stay at the left), and keeps
+ * each domain's tabs in their original relative order (stable sort).
+ *
+ * Returns the total number of tabs that were repositioned.
+ */
+async function sortTabsByDomain() {
+  const tabs = await chrome.tabs.query({});
+
+  // Group by window so we never move tabs across windows
+  const byWindow = new Map();
+  for (const t of tabs) {
+    if (!byWindow.has(t.windowId)) byWindow.set(t.windowId, []);
+    byWindow.get(t.windowId).push(t);
+  }
+
+  // Derive a stable "bucket key" for each tab — hostname without "www."
+  // Non-URL tabs (about:, chrome://, etc.) share the "~" bucket so they
+  // end up adjacent rather than interleaved with real domains.
+  const keyOf = (t) => {
+    try { return new URL(t.url).hostname.toLowerCase().replace(/^www\./, '') || '~'; }
+    catch { return '~'; }
+  };
+
+  let moved = 0;
+
+  for (const [windowId, winTabs] of byWindow) {
+    winTabs.sort((a, b) => a.index - b.index);
+
+    const pinnedCount = winTabs.filter(t => t.pinned).length;
+    const normal      = winTabs.filter(t => !t.pinned);
+    if (normal.length < 2) continue;
+
+    // Group normal tabs by hostname, preserving first-seen order
+    const order  = [];
+    const groups = new Map();
+    for (const t of normal) {
+      const k = keyOf(t);
+      if (!groups.has(k)) { groups.set(k, []); order.push(k); }
+      groups.get(k).push(t);
+    }
+
+    // Flatten into desired order
+    const sorted = order.flatMap(k => groups.get(k));
+
+    // Skip if nothing actually changes
+    const alreadySorted = sorted.every((t, i) => t.id === normal[i].id);
+    if (alreadySorted) continue;
+
+    // chrome.tabs.move with an array places them contiguously starting at `index`
+    // and preserves the given order.
+    await chrome.tabs.move(sorted.map(t => t.id), { index: pinnedCount });
+    moved += sorted.length;
+  }
+
+  await fetchOpenTabs();
+  return moved;
+}
+
+
+/**
  * focusTab(url)
  *
  * Switches Chrome to the tab with the given URL (exact match first,
@@ -700,6 +764,7 @@ const ICONS = {
   close:   `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>`,
   archive: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m6 4.125l2.25 2.25m0 0l2.25 2.25M12 13.875l2.25-2.25M12 13.875l-2.25 2.25M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" /></svg>`,
   focus:   `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 19.5 15-15m0 0H8.25m11.25 0v11.25" /></svg>`,
+  sort:    `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5h18M6 12h12m-9 4.5h6" /></svg>`,
 };
 
 
@@ -1150,7 +1215,7 @@ async function renderStaticDashboard() {
 
   if (domainGroups.length > 0 && openTabsSection) {
     if (openTabsSectionTitle) openTabsSectionTitle.textContent = 'Open tabs';
-    openTabsSectionCount.innerHTML = `${domainGroups.length} domain${domainGroups.length !== 1 ? 's' : ''} &nbsp;&middot;&nbsp; <button class="action-btn close-tabs" data-action="close-all-open-tabs" style="font-size:11px;padding:3px 10px;">${ICONS.close} Close all ${realTabs.length} tabs</button>`;
+    openTabsSectionCount.innerHTML = `${domainGroups.length} domain${domainGroups.length !== 1 ? 's' : ''} &nbsp;&middot;&nbsp; <button class="action-btn" data-action="sort-by-domain" style="font-size:11px;padding:3px 10px;">${ICONS.sort} Sort by domain</button> &nbsp;<button class="action-btn close-tabs" data-action="close-all-open-tabs" style="font-size:11px;padding:3px 10px;">${ICONS.close} Close all ${realTabs.length} tabs</button>`;
     openTabsMissionsEl.innerHTML = domainGroups.map(g => renderDomainCard(g)).join('');
     openTabsSection.style.display = 'block';
   } else if (openTabsSection) {
@@ -1638,6 +1703,26 @@ document.addEventListener('click', async (e) => {
     }
 
     showToast('Closed duplicates, kept one copy each');
+    return;
+  }
+
+  // ---- Sort open tabs so same-domain tabs sit next to each other ----
+  if (action === 'sort-by-domain') {
+    actionEl.disabled = true;
+    try {
+      const moved = await sortTabsByDomain();
+      if (moved > 0) {
+        showToast(`Tabs sorted by domain`);
+        await renderStaticDashboard();
+      } else {
+        showToast('Already sorted');
+      }
+    } catch (err) {
+      console.error('[tab-out] Sort failed:', err);
+      showToast('Sort failed');
+    } finally {
+      actionEl.disabled = false;
+    }
     return;
   }
 
