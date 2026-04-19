@@ -529,7 +529,7 @@ function removeStaleChipFromDom(chip, { silent = true } = {}) {
       }
     });
     const statTabs = document.getElementById('statTabs');
-    if (statTabs) statTabs.textContent = openTabs.length;
+    if (statTabs) statTabs.textContent = getRealTabs().length;
   }, 200);
 }
 
@@ -567,7 +567,7 @@ async function reconcileStaleChips() {
   });
   // Keep the footer tab count honest even if nothing was reaped
   const statTabs = document.getElementById('statTabs');
-  if (statTabs) statTabs.textContent = openTabs.length;
+  if (statTabs) statTabs.textContent = getRealTabs().length;
 }
 
 /**
@@ -1304,7 +1304,7 @@ async function renderStaticDashboard() {
 
   // --- Footer stats ---
   const statTabs = document.getElementById('statTabs');
-  if (statTabs) statTabs.textContent = openTabs.length;
+  if (statTabs) statTabs.textContent = getRealTabs().length;
 
   // --- Check for duplicate Tab Out tabs ---
   checkTabOutDupes();
@@ -1727,7 +1727,7 @@ document.addEventListener('click', async (e) => {
     showToast(`Closed ${urls.length} tab${urls.length !== 1 ? 's' : ''} from ${groupLabel}`);
 
     const statTabs = document.getElementById('statTabs');
-    if (statTabs) statTabs.textContent = openTabs.length;
+    if (statTabs) statTabs.textContent = getRealTabs().length;
     return;
   }
 
