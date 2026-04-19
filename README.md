@@ -35,6 +35,24 @@ The agent will walk you through it. Takes about 1 minute.
 
 ---
 
+## What's new in this fork
+
+Additions on top of [Zara's original](https://github.com/zarazhangrui/tab-out):
+
+- **Pinned pages grid** — a customizable quick-access row at the top of the new tab page. Click the trailing `+` to pin any URL with an optional label; toggle **Edit** to drag-reorder or remove pins. Favicons come from Google's `s2/favicons` service and data lives in `chrome.storage.local` under the `pinnedSites` key.
+- **Sort tabs by domain** — a new button in the **Open tabs** header reshuffles the browser tab bar so tabs with the same hostname sit next to each other. Works per-window, keeps browser-pinned tabs on the left, preserves each domain's internal order, and needs no new permissions (uses `chrome.tabs.move`).
+- **Fresh mint palette** — the warm amber + cream theme is swapped for a cooler, brighter mint-green theme. Warm amber is retained only for true warning surfaces (dupe banner, close actions, duplicate badges).
+
+To install this fork instead of the upstream, just clone it:
+
+```bash
+git clone https://github.com/YingqianChen/tab-out.git
+```
+
+The load-unpacked steps below are identical.
+
+---
+
 ## Manual Setup
 
 **1. Clone the repo**
