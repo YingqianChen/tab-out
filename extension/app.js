@@ -1174,6 +1174,175 @@ async function renderDashboard() {
 
 
 /* ----------------------------------------------------------------
+   PINNED PAGES — customizable quick-access tile grid
+
+   Stored in chrome.storage.local under the "pinnedSites" key.
+   Shape: [{ id, url, title, addedAt }]
+   ---------------------------------------------------------------- */
+
+async function getPinnedSites() {
+  const { pinnedSites = [] } = await chrome.storage.local.get('pinnedSites');
+  return pinnedSites;
+}
+
+async function savePinnedSites(arr) {
+  await chrome.storage.local.set({ pinnedSites: arr });
+}
+
+// Accept "github.com" and return "https://github.com/". Returns null if invalid.
+function normalizePinnedUrl(raw) {
+  let s = (raw || '').trim();
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  try { return new URL(s).toString(); }
+  catch { return null; }
+}
+
+function pinnedHostname(url) {
+  try { return new URL(url).hostname.toLowerCase(); }
+  catch { return ''; }
+}
+
+async function addPinnedSite(rawUrl, customTitle) {
+  const url = normalizePinnedUrl(rawUrl);
+  if (!url) return { ok: false, error: 'Invalid URL' };
+  const host = pinnedHostname(url);
+  const list = await getPinnedSites();
+  if (list.some(p => pinnedHostname(p.url) === host)) {
+    return { ok: false, error: 'Already pinned' };
+  }
+  list.push({
+    id: Date.now().toString(),
+    url,
+    title: (customTitle || '').trim(),
+    addedAt: new Date().toISOString(),
+  });
+  await savePinnedSites(list);
+  return { ok: true };
+}
+
+async function removePinnedSite(id) {
+  const list = await getPinnedSites();
+  await savePinnedSites(list.filter(p => p.id !== id));
+}
+
+async function reorderPinnedSites(fromId, toId) {
+  if (!fromId || !toId || fromId === toId) return;
+  const list = await getPinnedSites();
+  const fromIdx = list.findIndex(p => p.id === fromId);
+  const toIdx   = list.findIndex(p => p.id === toId);
+  if (fromIdx === -1 || toIdx === -1) return;
+  const [moved] = list.splice(fromIdx, 1);
+  list.splice(toIdx, 0, moved);
+  await savePinnedSites(list);
+}
+
+function pinnedTileHtml(site) {
+  const host      = pinnedHostname(site.url);
+  const label     = site.title || host || site.url;
+  const favicon   = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
+  const letter    = (label || '?').trim().charAt(0).toUpperCase().replace(/[<>&'"]/g, '?');
+  const safeTitle = label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const safeUrl   = site.url.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  return `
+    <a class="pinned-tile" href="${safeUrl}" title="${safeUrl}" data-pinned-id="${site.id}" draggable="true">
+      <img class="pinned-favicon" src="${favicon}" alt="" onerror="this.outerHTML='<span class=\\'pinned-favicon-fallback\\'>${letter}</span>'">
+      <span class="pinned-label">${safeTitle}</span>
+      <button type="button" class="pinned-remove" data-action="remove-pinned" data-pinned-id="${site.id}" aria-label="Remove">&times;</button>
+    </a>
+  `;
+}
+
+async function renderPinnedSection() {
+  const grid  = document.getElementById('pinnedGrid');
+  const empty = document.getElementById('pinnedEmpty');
+  if (!grid) return;
+
+  const sites = await getPinnedSites();
+
+  grid.innerHTML =
+    sites.map(pinnedTileHtml).join('') +
+    `<button type="button" class="pinned-add-tile" data-action="show-pinned-add" aria-label="Add pinned page">
+       <span class="pinned-add-icon">+</span>
+       <span>Add</span>
+     </button>`;
+
+  if (empty) empty.style.display = sites.length === 0 ? 'block' : 'none';
+
+  grid.querySelectorAll('.pinned-tile').forEach(tile => {
+    tile.addEventListener('dragstart', handlePinnedDragStart);
+    tile.addEventListener('dragover',  handlePinnedDragOver);
+    tile.addEventListener('dragleave', handlePinnedDragLeave);
+    tile.addEventListener('drop',      handlePinnedDrop);
+    tile.addEventListener('dragend',   handlePinnedDragEnd);
+  });
+}
+
+let _pinnedDraggingId = null;
+
+function handlePinnedDragStart(e) {
+  const section = document.getElementById('pinnedSection');
+  if (!section?.classList.contains('editing')) { e.preventDefault(); return; }
+  _pinnedDraggingId = e.currentTarget.dataset.pinnedId;
+  e.currentTarget.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', _pinnedDraggingId); } catch {}
+}
+
+function handlePinnedDragOver(e) {
+  if (!_pinnedDraggingId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-over');
+}
+
+function handlePinnedDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over');
+}
+
+async function handlePinnedDrop(e) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const toId   = e.currentTarget.dataset.pinnedId;
+  const fromId = _pinnedDraggingId;
+  _pinnedDraggingId = null;
+  if (fromId && toId && fromId !== toId) {
+    await reorderPinnedSites(fromId, toId);
+    await renderPinnedSection();
+    document.getElementById('pinnedSection')?.classList.add('editing');
+    const btn = document.getElementById('pinnedEditBtn');
+    if (btn) btn.textContent = 'Done';
+  }
+}
+
+function handlePinnedDragEnd(e) {
+  e.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.pinned-tile.drag-over').forEach(el => el.classList.remove('drag-over'));
+  _pinnedDraggingId = null;
+}
+
+// Submit handler is wired up via document-level 'submit' listener below.
+async function handlePinnedAddSubmit(e) {
+  e.preventDefault();
+  const urlInput   = document.getElementById('pinnedAddUrl');
+  const titleInput = document.getElementById('pinnedAddTitle');
+  if (!urlInput) return;
+  const result = await addPinnedSite(urlInput.value, titleInput?.value);
+  if (!result.ok) { showToast(result.error || 'Could not add'); return; }
+  urlInput.value = '';
+  if (titleInput) titleInput.value = '';
+  const form = document.getElementById('pinnedAddForm');
+  if (form) form.style.display = 'none';
+  await renderPinnedSection();
+  showToast('Pinned');
+}
+
+document.addEventListener('submit', (e) => {
+  if (e.target && e.target.id === 'pinnedAddForm') handlePinnedAddSubmit(e);
+});
+
+
+/* ----------------------------------------------------------------
    EVENT HANDLERS — using event delegation
 
    One listener on document handles ALL button clicks.
@@ -1182,11 +1351,71 @@ async function renderDashboard() {
    ---------------------------------------------------------------- */
 
 document.addEventListener('click', async (e) => {
+  // ---- Suppress pinned-tile navigation while in edit mode ----
+  // (pinned tiles are <a href>; when editing, clicks should rearrange/remove, not navigate)
+  const pinnedTile = e.target.closest('.pinned-tile');
+  if (pinnedTile && !e.target.closest('[data-action="remove-pinned"]')) {
+    const section = document.getElementById('pinnedSection');
+    if (section?.classList.contains('editing')) {
+      e.preventDefault();
+      return;
+    }
+  }
+
   // Walk up the DOM to find the nearest element with data-action
   const actionEl = e.target.closest('[data-action]');
   if (!actionEl) return;
 
   const action = actionEl.dataset.action;
+
+  // ---- Pinned: toggle edit mode ----
+  if (action === 'toggle-pinned-edit') {
+    const section = document.getElementById('pinnedSection');
+    const btn = document.getElementById('pinnedEditBtn');
+    if (section) {
+      const nowEditing = !section.classList.contains('editing');
+      section.classList.toggle('editing', nowEditing);
+      if (btn) btn.textContent = nowEditing ? 'Done' : 'Edit';
+      // Leaving edit mode? Also hide an open add-form.
+      if (!nowEditing) {
+        const form = document.getElementById('pinnedAddForm');
+        if (form) form.style.display = 'none';
+      }
+    }
+    return;
+  }
+
+  // ---- Pinned: show inline add form ----
+  if (action === 'show-pinned-add') {
+    const form = document.getElementById('pinnedAddForm');
+    if (form) {
+      form.style.display = 'flex';
+      document.getElementById('pinnedAddUrl')?.focus();
+    }
+    return;
+  }
+
+  // ---- Pinned: cancel add ----
+  if (action === 'cancel-pinned-add') {
+    const form = document.getElementById('pinnedAddForm');
+    if (form) { form.style.display = 'none'; form.reset?.(); }
+    return;
+  }
+
+  // ---- Pinned: remove a site ----
+  if (action === 'remove-pinned') {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = actionEl.dataset.pinnedId;
+    if (!id) return;
+    await removePinnedSite(id);
+    await renderPinnedSection();
+    document.getElementById('pinnedSection')?.classList.add('editing');
+    const btn = document.getElementById('pinnedEditBtn');
+    if (btn) btn.textContent = 'Done';
+    showToast('Removed');
+    return;
+  }
 
   // ---- Close duplicate Tab Out tabs ----
   if (action === 'close-tabout-dupes') {
@@ -1479,4 +1708,5 @@ document.addEventListener('input', async (e) => {
 /* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
+renderPinnedSection();
 renderDashboard();

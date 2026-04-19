@@ -29,6 +29,32 @@
   </header>
 
   <!-- ================================================================
+       PINNED PAGES — customizable quick-access tile grid
+       Persisted in chrome.storage.local under key "pinnedSites".
+       Logic in app.js: renderPinnedSection(), add/remove/reorder helpers.
+       ================================================================ -->
+  <section class="pinned-section" id="pinnedSection">
+    <div class="section-header">
+      <h2>Pinned</h2>
+      <div class="section-line"></div>
+      <button class="pinned-edit-btn" id="pinnedEditBtn" data-action="toggle-pinned-edit">Edit</button>
+    </div>
+    <!-- Tiles (and trailing + tile) injected by renderPinnedSection() -->
+    <div class="pinned-grid" id="pinnedGrid"></div>
+    <!-- Empty-state hint, only shown when no pins exist -->
+    <div class="pinned-empty" id="pinnedEmpty" style="display:none">
+      Pin your go-to sites for one-click access.
+    </div>
+    <!-- Inline add form — shown when user clicks the + tile -->
+    <form class="pinned-add-form" id="pinnedAddForm" style="display:none" autocomplete="off">
+      <input type="url" id="pinnedAddUrl" placeholder="https://example.com" required>
+      <input type="text" id="pinnedAddTitle" placeholder="Label (optional)">
+      <button type="submit">Add</button>
+      <button type="button" data-action="cancel-pinned-add">Cancel</button>
+    </form>
+  </section>
+
+  <!-- ================================================================
        TAB OUT DUPES BANNER — appears when you have extra Tab Out tabs open
        Hidden by default; app.js shows it when dupeTabOutCount > 1
        ================================================================ -->
