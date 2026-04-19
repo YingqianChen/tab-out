@@ -1707,16 +1707,14 @@ document.addEventListener('click', async (e) => {
   }
 
   // ---- Sort open tabs so same-domain tabs sit next to each other ----
+  // The dashboard groups by hostname, not by physical tab order, so we
+  // deliberately do NOT re-render after sorting — that would wipe the
+  // DOM and restart fade-in animations for no visual gain.
   if (action === 'sort-by-domain') {
     actionEl.disabled = true;
     try {
       const moved = await sortTabsByDomain();
-      if (moved > 0) {
-        showToast(`Tabs sorted by domain`);
-        await renderStaticDashboard();
-      } else {
-        showToast('Already sorted');
-      }
+      showToast(moved > 0 ? 'Tabs sorted by domain' : 'Already sorted');
     } catch (err) {
       console.error('[tab-out] Sort failed:', err);
       showToast('Sort failed');
