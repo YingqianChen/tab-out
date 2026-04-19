@@ -1855,5 +1855,15 @@ document.addEventListener('input', async (e) => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') scheduleStaleScan();
 });
+
+// Also react to tab closures directly — catches the case where the user
+// hovers another tab in the top bar and clicks its X without ever leaving
+// Tab Out. visibilitychange wouldn't fire there (Tab Out stays visible),
+// so we'd otherwise miss the signal. scheduleStaleScan is debounced, so
+// closing many tabs in quick succession collapses to a single scan.
+if (chrome.tabs?.onRemoved) {
+  chrome.tabs.onRemoved.addListener(() => scheduleStaleScan());
+}
+
 renderPinnedSection();
 renderDashboard();
