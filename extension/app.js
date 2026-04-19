@@ -178,9 +178,10 @@ async function sortTabsByDomain() {
  *
  * Switches Chrome to the tab with the given URL (exact match first,
  * then hostname fallback). Also brings the window to the front.
+ * Returns true if a matching tab was found and focused, false otherwise.
  */
 async function focusTab(url) {
-  if (!url) return;
+  if (!url) return false;
   const allTabs = await chrome.tabs.query({});
   const currentWindow = await chrome.windows.getCurrent();
 
@@ -198,12 +199,13 @@ async function focusTab(url) {
     } catch {}
   }
 
-  if (matches.length === 0) return;
+  if (matches.length === 0) return false;
 
   // Prefer a match in a different window so it actually switches windows
   const match = matches.find(t => t.windowId !== currentWindow.id) || matches[0];
   await chrome.tabs.update(match.id, { active: true });
   await chrome.windows.update(match.windowId, { focused: true });
+  return true;
 }
 
 /**
@@ -492,6 +494,80 @@ function animateCardOut(card) {
     card.remove();
     checkAndShowEmptyState();
   }, 300);
+}
+
+/**
+ * removeStaleChipFromDom(chip, { silent })
+ *
+ * Smoothly removes a single .page-chip from the DOM and reconciles any
+ * knock-on UI: if its parent mission-card ends up with zero focusable
+ * chips, fades the card out too; always refreshes the footer tab count.
+ *
+ * silent:false plays the swoosh sound + confetti burst (user-initiated
+ * close). silent:true is quiet — used by self-healing paths where the
+ * tab was already gone (closed externally or via save-for-later).
+ */
+function removeStaleChipFromDom(chip, { silent = true } = {}) {
+  if (!chip) return;
+
+  if (!silent) {
+    const rect = chip.getBoundingClientRect();
+    shootConfetti(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    playCloseSound();
+  }
+
+  chip.style.transition = 'opacity 0.2s, transform 0.2s';
+  chip.style.opacity    = '0';
+  chip.style.transform  = 'scale(0.8)';
+
+  setTimeout(() => {
+    chip.remove();
+    // Any card that ended up without a focusable chip should fade out too
+    document.querySelectorAll('.mission-card').forEach(c => {
+      if (c.querySelectorAll('.page-chip[data-action="focus-tab"]').length === 0) {
+        animateCardOut(c);
+      }
+    });
+    const statTabs = document.getElementById('statTabs');
+    if (statTabs) statTabs.textContent = openTabs.length;
+  }, 200);
+}
+
+
+/* ----------------------------------------------------------------
+   STALE-CHIP RECONCILIATION
+
+   Tab Out renders a snapshot of chrome.tabs.query() and never listens
+   for real-time tab events (by design — a background listener would
+   burn cycles while the user isn't even looking at Tab Out).
+
+   Instead, every time the new-tab page becomes visible again we do
+   a one-shot comparison: any rendered chip whose URL is no longer a
+   live tab gets reaped in place. This is a "subtraction-only" sync —
+   tabs the user opened elsewhere do NOT auto-appear, because that
+   would require a full regroup + fade-in restart, and the user has
+   asked us not to flicker the dashboard on tangential events.
+   ---------------------------------------------------------------- */
+
+let _staleScanTimer = null;
+function scheduleStaleScan() {
+  clearTimeout(_staleScanTimer);
+  _staleScanTimer = setTimeout(reconcileStaleChips, 150);
+}
+
+async function reconcileStaleChips() {
+  await fetchOpenTabs();
+  const liveUrls = new Set(openTabs.map(t => t.url));
+  const chips = document.querySelectorAll('.page-chip[data-tab-url]');
+  chips.forEach(chip => {
+    const url = chip.dataset.tabUrl;
+    if (url && !liveUrls.has(url)) {
+      removeStaleChipFromDom(chip, { silent: true });
+    }
+  });
+  // Keep the footer tab count honest even if nothing was reaped
+  const statTabs = document.getElementById('statTabs');
+  if (statTabs) statTabs.textContent = openTabs.length;
 }
 
 /**
@@ -1515,7 +1591,15 @@ document.addEventListener('click', async (e) => {
   // ---- Focus a specific tab ----
   if (action === 'focus-tab') {
     const tabUrl = actionEl.dataset.tabUrl;
-    if (tabUrl) await focusTab(tabUrl);
+    if (!tabUrl) return;
+    const ok = await focusTab(tabUrl);
+    if (!ok) {
+      // Tab was closed outside of Tab Out; reap the stale chip in place
+      await fetchOpenTabs();
+      const chip = actionEl.closest('.page-chip');
+      removeStaleChipFromDom(chip, { silent: true });
+      showToast('Tab already closed');
+    }
     return;
   }
 
@@ -1525,40 +1609,17 @@ document.addEventListener('click', async (e) => {
     const tabUrl = actionEl.dataset.tabUrl;
     if (!tabUrl) return;
 
-    // Close the tab in Chrome directly
+    // Close the tab in Chrome directly. If the tab was already gone
+    // (closed externally), just self-heal the stale chip silently.
     const allTabs = await chrome.tabs.query({});
     const match   = allTabs.find(t => t.url === tabUrl);
     if (match) await chrome.tabs.remove(match.id);
     await fetchOpenTabs();
 
-    playCloseSound();
-
-    // Animate the chip row out
     const chip = actionEl.closest('.page-chip');
-    if (chip) {
-      const rect = chip.getBoundingClientRect();
-      shootConfetti(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      chip.style.transition = 'opacity 0.2s, transform 0.2s';
-      chip.style.opacity    = '0';
-      chip.style.transform  = 'scale(0.8)';
-      setTimeout(() => {
-        chip.remove();
-        // If the card now has no tabs, remove it too
-        const parentCard = document.querySelector('.mission-card:has(.mission-pages:empty)');
-        if (parentCard) animateCardOut(parentCard);
-        document.querySelectorAll('.mission-card').forEach(c => {
-          if (c.querySelectorAll('.page-chip[data-action="focus-tab"]').length === 0) {
-            animateCardOut(c);
-          }
-        });
-      }, 200);
-    }
+    removeStaleChipFromDom(chip, { silent: !match });
 
-    // Update footer
-    const statTabs = document.getElementById('statTabs');
-    if (statTabs) statTabs.textContent = openTabs.length;
-
-    showToast('Tab closed');
+    showToast(match ? 'Tab closed' : 'Tab already closed');
     return;
   }
 
@@ -1578,22 +1639,17 @@ document.addEventListener('click', async (e) => {
       return;
     }
 
-    // Close the tab in Chrome
+    // Close the tab in Chrome (if it still exists). Either way we reap
+    // the chip from the dashboard — the save already made it into storage.
     const allTabs = await chrome.tabs.query({});
     const match   = allTabs.find(t => t.url === tabUrl);
     if (match) await chrome.tabs.remove(match.id);
     await fetchOpenTabs();
 
-    // Animate chip out
     const chip = actionEl.closest('.page-chip');
-    if (chip) {
-      chip.style.transition = 'opacity 0.2s, transform 0.2s';
-      chip.style.opacity    = '0';
-      chip.style.transform  = 'scale(0.8)';
-      setTimeout(() => chip.remove(), 200);
-    }
+    removeStaleChipFromDom(chip, { silent: true });
 
-    showToast('Saved for later');
+    showToast(match ? 'Saved for later' : 'Saved — tab was already closed');
     await renderDeferredColumn();
     return;
   }
@@ -1796,5 +1852,8 @@ document.addEventListener('input', async (e) => {
 /* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') scheduleStaleScan();
+});
 renderPinnedSection();
 renderDashboard();
