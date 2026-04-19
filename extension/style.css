@@ -1036,10 +1036,17 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
 }
 
 /* Slide-out animation for items being removed */
-.deferred-item.removing {
+.deferred-item.removing,
+.archive-item.removing {
   opacity: 0;
   transform: translateX(20px);
   transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* Archive items use the same dismiss button but with smaller icon */
+.archive-dismiss svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* ---- Empty state ---- */

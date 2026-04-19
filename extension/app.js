@@ -1059,12 +1059,16 @@ function renderDeferredItem(item) {
  */
 function renderArchiveItem(item) {
   const ago = item.completedAt ? timeAgo(item.completedAt) : timeAgo(item.savedAt);
+  const safeTitle = (item.title || '').replace(/"/g, '&quot;');
   return `
     <div class="archive-item">
-      <a href="${item.url}" target="_blank" rel="noopener" class="archive-item-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
+      <a href="${item.url}" target="_blank" rel="noopener" class="archive-item-title" title="${safeTitle}">
         ${item.title || item.url}
       </a>
       <span class="archive-item-date">${ago}</span>
+      <button class="deferred-dismiss archive-dismiss" data-action="dismiss-deferred" data-deferred-id="${item.id}" title="Remove from archive" aria-label="Remove from archive">
+        ${ICONS.close}
+      </button>
     </div>`;
 }
 
@@ -1616,14 +1620,15 @@ document.addEventListener('click', async (e) => {
     return;
   }
 
-  // ---- Dismiss a saved tab (removes it entirely) ----
+  // ---- Dismiss a saved tab (removes it entirely — works for both the
+  //      active Saved-for-later list and for archived items) ----
   if (action === 'dismiss-deferred') {
     const id = actionEl.dataset.deferredId;
     if (!id) return;
 
     await dismissSavedTab(id);
 
-    const item = actionEl.closest('.deferred-item');
+    const item = actionEl.closest('.deferred-item, .archive-item');
     if (item) {
       item.classList.add('removing');
       setTimeout(() => {
